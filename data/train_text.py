@@ -69,7 +69,6 @@ num_epochs = 5
 tokenizer = AutoTokenizer.from_pretrained("distilbert-base-uncased")
 sentences = text_list
 texts = tokenizer(sentences, padding=True, truncation=True, return_tensors="pt")
-
 """
     texts = {"input_ids":[[][]...[]], "attention_mask":[[][]...[]]}
     data shape:
@@ -193,5 +192,7 @@ with torch.no_grad():
 
         y = torch.argmax(y, dim=1)
         y_true.extend(y.tolist())
+
+print("\nTEST METRICS:")
 test_metric = print_metrics_binary(y_true, y_pred, verbose=1)
 # print("Test Acc: {:.4f}".format(test_acc))
