@@ -146,41 +146,34 @@ for epoch in range(num_epochs):
 
     # Validation
     epoch_losses = []
-
-    total = 0
-    correct = 0
     y_pred = []
     y_true = []
     model.eval()
+
     with torch.no_grad():
         for batch in val_loader:
+
             _, x_inputids, x_attentionmask, y = batch
             x_inputids = torch.Tensor(x_inputids).to(device)
             x_attentionmask = torch.Tensor(x_attentionmask).to(device)
             y = y.to(device)
-            total += y.size(0) # total records number
+
             outputs = model(x_inputids, attention_mask=x_attentionmask).logits
-
             loss = criterion(outputs, y)
-
             epoch_losses.append(loss.item())
 
-            pred = torch.argmax(outputs, dim=1)
             y_pred.extend(outputs.tolist())
-            # one-hot -> list
-            y = torch.argmax(y, dim=1)
-
+            y = torch.argmax(y, dim=1)  # one-hot -> list
             y_true.extend(y.tolist())
-            correct += (pred == y).sum()
+
             
     y_true = np.array(y_true)
     y_pred = np.array(y_pred)
     eval_metrics = print_metrics_binary(y_true, y_pred, verbose=0)
     epoch_losses = np.array(epoch_losses)
     epoch_loss = epoch_losses.sum() / len(epoch_losses)
-    acc = correct / total
     print("Epoch: {} || val_loss: {:.4f} || val_acc: {:.4f}".format(epoch+1, epoch_loss, eval_metrics["acc"]))
-    # print("acc: {}".format(eval_metrics["acc"]))
+
 
 # Test
 model.eval()
