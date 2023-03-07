@@ -7,14 +7,21 @@ from torchtext.data.utils import get_tokenizer
 from torchtext.vocab import build_vocab_from_iterator
 from torch.utils.data import Dataset, TensorDataset, DataLoader
 from transformers import get_scheduler
+from eval_metrics import print_metrics_binary
 import pandas as pd
-
+import warnings
+warnings.filterwarnings('ignore')
 
 t = pd.read_csv("MP_IN_adm.csv")
 id_list = np.array(t['id'].astype(int))  # id, int
 text_list = t['text'].astype(str).tolist()   # text, str
 label_list = torch.tensor(t['hospital_expire_flag'].astype(int))   # hospital_expipre_flag, int
 
+
+datasize = 2000
+id_list = id_list[:datasize]
+text_list = text_list[:datasize]
+label_list = label_list[:datasize]
 
 class TextDataset(Dataset):
     def __init__(self, id, inputs_ids, attention_mask, flag):
@@ -57,11 +64,9 @@ label_list = torch.FloatTensor(onehot(label_list))
 batch_size = 64
 num_labels = 2  # 类型数量
 LR = 1e-3
-num_epochs = 10
+num_epochs = 5
 
 tokenizer = AutoTokenizer.from_pretrained("distilbert-base-uncased")
-
-# 取前1000条病例，太多内存无法读入
 sentences = text_list
 texts = tokenizer(sentences, padding=True, truncation=True, return_tensors="pt")
 
@@ -75,27 +80,22 @@ texts = tokenizer(sentences, padding=True, truncation=True, return_tensors="pt")
 tr_len = split_len(id_list, 0.6)
 va_len = tr_len + split_len(id_list, 0.2)
 
-# train_dataset = TextDataset(id_list[:tr_len], texts["input_ids"][:tr_len], texts["attention_mask"][:tr_len], label_list[:tr_len])
-train_dataset = TextDataset(id_list[:1000], texts["input_ids"][:1000], texts["attention_mask"][:1000], label_list[:1000])
+train_dataset = TextDataset(id_list[:tr_len], texts["input_ids"][:tr_len], texts["attention_mask"][:tr_len], label_list[:tr_len])
 train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-# print(next(iter(dataloader)))
 
-# val_dataset = TextDataset(id_list[tr_len:va_len], texts["input_ids"][tr_len:va_len], texts["attention_mask"][tr_len:va_len], label_list[tr_len:va_len])
-val_dataset = TextDataset(id_list[1000:1600], texts["input_ids"][1000:1600], texts["attention_mask"][1000:1600], label_list[1000:1600])
+
+val_dataset = TextDataset(id_list[tr_len:va_len], texts["input_ids"][tr_len:va_len], texts["attention_mask"][tr_len:va_len], label_list[tr_len:va_len])
 val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True)
 
-# test_dataset = TextDataset(id_list[va_len:], texts["input_ids"][va_len:], texts["attention_mask"][va_len:], label_list[va_len:])
-test_dataset = TextDataset(id_list[1600:2000], texts["input_ids"][1600:2000], texts["attention_mask"][1600:2000], label_list[1600:2000])
+test_dataset = TextDataset(id_list[va_len:], texts["input_ids"][va_len:], texts["attention_mask"][va_len:], label_list[va_len:])
 test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
-
 
 
 
 num_training_steps = num_epochs * len(train_loader)
 
 model = DistilBertForSequenceClassification.from_pretrained("distilbert-base-uncased", num_labels=num_labels)
-in_features = model.classifier.in_features
-# 输出两种类型的softmax
+
 classifier = nn.Sequential(
     nn.Linear(in_features=768, out_features=2, bias=True),
     nn.Softmax(dim=1)
@@ -149,6 +149,8 @@ for epoch in range(num_epochs):
 
     total = 0
     correct = 0
+    y_pred = []
+    y_true = []
     model.eval()
     with torch.no_grad():
         for batch in val_loader:
@@ -164,31 +166,39 @@ for epoch in range(num_epochs):
             epoch_losses.append(loss.item())
 
             pred = torch.argmax(outputs, dim=1)
-            # one-hot -> y_ture
-            y_true = torch.argmax(y, dim=1)
-            correct += (pred == y_true).sum()
-        epoch_losses = np.array(epoch_losses)
-        epoch_loss = epoch_losses.sum() / len(epoch_losses)
-        acc = correct / total
-        print("Epoch: {} || val_loss: {:.4f} || val_acc: {:.4f}".format(epoch+1, epoch_loss, acc))
+            y_pred.extend(outputs.tolist())
+            # one-hot -> list
+            y = torch.argmax(y, dim=1)
+
+            y_true.extend(y.tolist())
+            correct += (pred == y).sum()
+            
+    y_true = np.array(y_true)
+    y_pred = np.array(y_pred)
+    eval_metrics = print_metrics_binary(y_true, y_pred, verbose=0)
+    epoch_losses = np.array(epoch_losses)
+    epoch_loss = epoch_losses.sum() / len(epoch_losses)
+    acc = correct / total
+    print("Epoch: {} || val_loss: {:.4f} || val_acc: {:.4f}".format(epoch+1, epoch_loss, eval_metrics["acc"]))
+    # print("acc: {}".format(eval_metrics["acc"]))
 
 # Test
 model.eval()
-test_correct = 0
-test_total = 0
+y_pred = []
+y_true = []
 with torch.no_grad():
     for i, batch in enumerate(test_loader):
         _, x_inputids, x_attentionmask, y = batch
         x_inputids = torch.Tensor(x_inputids).to(device)
         x_attentionmask = torch.Tensor(x_attentionmask).to(device)
         y = y.to(device)
-        test_total += y.size(0)
 
         outputs = model(x_inputids, attention_mask=x_attentionmask).logits
 
         pred = torch.argmax(outputs, dim=1)
-        # one-hot -> y_ture
-        y_true = torch.argmax(y, dim=1)
-        test_correct += (pred == y_true).sum()
-test_acc = test_correct / test_total
-print("Test Acc: {:.4f}".format(test_acc))
+        y_pred.extend(outputs.tolist())
+
+        y = torch.argmax(y, dim=1)
+        y_true.extend(y.tolist())
+test_metric = print_metrics_binary(y_true, y_pred, verbose=1)
+# print("Test Acc: {:.4f}".format(test_acc))
